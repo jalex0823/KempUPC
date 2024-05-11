@@ -10,6 +10,9 @@ import glob
 from PyPDF2 import PdfMerger
 from svglib.svglib import svg2rlg
 from reportlab.graphics import renderPDF
+import tkinter as tk
+from tkinter import ttk
+from ttkthemes import ThemedTk
 
 TEMP_DIR = "C:\\Temp"
 
@@ -131,21 +134,26 @@ def combine_svg_to_pdf():
 def open_output():
     webbrowser.open('combined.pdf')
 
-root = tk.Tk()
+root = ThemedTk(theme="arc")  # Use the "arc" theme
 root.geometry("280x200")
 root.configure(bg='white')
 root.title("Create UPC Labels Form")
 
-open_button = tk.Button(root, text="Import Excel Spreadsheet", command=import_excel_and_create_svg)
-open_button.grid(row=0, column=0, sticky='ew', padx=(10, 10), pady=(10, 5))
+# Create a style
+style = ttk.Style()
+style.configure("TButton", font=("Arial", 10), padding=10)
+style.map("TButton",
+          foreground=[('pressed', 'red'), ('active', 'blue')],
+          background=[('pressed', '!disabled', 'black'), ('active', 'white')])
 
-combine_button = tk.Button(root, text="Combine SVG to PDF", command=combine_svg_to_pdf)
-combine_button.grid(row=1, column=0, sticky='ew', padx=(10, 10), pady=(5, 5))
+# Use ttk.Button instead of tk.Button and specify the width
+open_button = ttk.Button(root, text="Import Excel Spreadsheet", command=import_excel_and_create_svg, width=30)
+open_button.place(relx=0.5, rely=0.25, anchor='center')  # Place the button at the center of the window
 
-output_button = tk.Button(root, text="Output UPC PDF File", command=open_output)
-output_button.grid(row=2, column=0, sticky='ew', padx=(10, 10), pady=(5, 10))
+combine_button = ttk.Button(root, text="Create UPC-A Codes", command=combine_svg_to_pdf, width=30)
+combine_button.place(relx=0.5, rely=0.55, anchor='center')  # Place the button at the center of the window
 
 message_label = tk.Label(root, text="", bg='white')
-message_label.grid(row=3, column=0, columnspan=2)
+message_label.place(relx=0.5, rely=0.85, anchor='center')  # Place the label at the center of the window
 
 root.mainloop()
