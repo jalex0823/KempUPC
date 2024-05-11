@@ -95,12 +95,24 @@ def combine_svg_to_pdf():
     merger = PdfMerger()
 
     for pdf in pdf_files:
-        merger.append(pdf)
+        if os.path.exists(pdf):  # Check if the PDF file exists
+            try:
+                with open(pdf, 'rb') as f:
+                    merger.append(f)
+            except FileNotFoundError:
+                pass  # Do nothing if the file does not exist
+            except Exception as e:
+                print(f"Failed to append {pdf} to PDF Merger: {e}")
+        else:
+            print(f"PDF file {pdf} does not exist.")
 
     combined_pdf_path = os.path.join(TEMP_DIR, "combined.pdf")
     merger.write(combined_pdf_path)
     merger.close()
     message_label.config(text="PDF file created successfully.")
+
+    # Open the combined PDF file
+    os.startfile(combined_pdf_path)
 
     # Delete the individual PDF and SVG files
     for file_path in pdf_files + svg_files:
@@ -108,6 +120,13 @@ def combine_svg_to_pdf():
             os.remove(file_path)
         except Exception as e:
             print(f"Failed to delete {file_path}: {e}")
+
+    # Remove all SVG files after the combined PDF is created
+    for svg_file in glob.glob(os.path.join(TEMP_DIR, "*.svg")):
+        try:
+            os.remove(svg_file)
+        except Exception as e:
+            print(f"Failed to delete {svg_file}: {e}")
 
 def open_output():
     webbrowser.open('combined.pdf')
