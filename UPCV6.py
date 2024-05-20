@@ -17,6 +17,9 @@ TEMP_DIR = "C:\\Temp"
 # Add a global variable to store the UPC numbers
 upc_numbers = []
 
+# This list will store the Excel data
+excel_data = []
+
 def calculate_check_digit(upca):
     odd_sum = sum(int(x) for i, x in enumerate(upca) if i % 2 == 0)
     even_sum = sum(int(x) for i, x in enumerate(upca) if i % 2 == 1)
@@ -24,8 +27,9 @@ def calculate_check_digit(upca):
     check_digit = (10 - (total_sum % 10)) % 10
     return str(check_digit)
 
-def import_excel_and_create_images(image_format='png'):
+def import_excel_and_create_png():
     global upc_numbers
+    global excel_data  # Add this line to access the global variable
     filepath = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx;*.xls;*.xlsb")])
     if not filepath:
         return
@@ -48,19 +52,24 @@ def import_excel_and_create_images(image_format='png'):
         item_description = data.loc[i, 'Item Description']
         item_number = str(data.loc[i, 'Item#'])  # Convert item_number to string
 
+        # Append the row data to the excel_data list
+        excel_data.append({
+            'Item_description': item_description,
+            'Item_number': item_number,
+            'UPC_code': upc_code
+        })
+
         # Fetch the barcode image from bwip-js API
-        url = f"https://bwipjs-api.metafloor.com/?bcid=upca&text={upc_code}&scale=5&rotate=N&includetext&bgcolor=ffffff"
+        url = f"https://bwipjs-api.metafloor.com/?bcid=upca&text={upc_code}&scale=3&rotate=N&includetext"
         response = requests.get(url)
-        barcode_image = Image.open(BytesIO(response.content))
+        barcode_image = Image.open(BytesIO(response.content)).convert("RGBA")
 
-        # Create a white background image
-        background = Image.new('RGB', barcode_image.size, (255, 255, 255))
-
-        # Paste the barcode image onto the background
-        background.paste(barcode_image, mask=barcode_image.split()[3])  # 3 is the alpha channel
+        # Create a new white image of the same size
+        white_background = Image.new("RGBA", barcode_image.size, "WHITE")
+        white_background.paste(barcode_image, (0, 0), barcode_image)
 
         barcode_image_path = os.path.join(TEMP_DIR, f"barcode_{i}.png")
-        background.save(barcode_image_path, 'PNG')
+        white_background.save(barcode_image_path)
 
         # Verify if the file has been created
         if os.path.exists(barcode_image_path):
@@ -69,60 +78,58 @@ def import_excel_and_create_images(image_format='png'):
             print("Error in saving the barcode.")
 
     message_label.config(text="PNG files created successfully.")
-def combine_images_to_pdf(image_format='png'):
-    image_files = glob.glob(os.path.join(TEMP_DIR, f"barcode_*.{image_format}"))  # Find all image files that start with "barcode_"
-    combined_pdf_path = os.path.join(TEMP_DIR, "combined.pdf")
-    
-    c = canvas.Canvas(combined_pdf_path, pagesize=letter)
-    width, height = letter
-    
-    for i, image_file in enumerate(image_files):
-        if not os.path.exists(image_file):
-            print(f"{image_format.upper()} file {image_file} does not exist.")
-            continue
-    
-        # Add each image file to a new page in the PDF
-        if i % 44 == 0 and i != 0:
-            c.showPage()
-    
-        # Adjust x and y coordinates for each barcode
-        x = 70 if i % 2 == 0 else width / 2
-        y = height - ((i // 2) % 22 * 100) - 100  # Reduce the buffer between rows
-    
-        c.drawImage(image_file, x, y, 120, 50)  # Reduce the width of the barcode
-    
+
+# Rest of your code...
+def combine_png_to_pdf():
+    # Create a new PDF
+    c = canvas.Canvas("combined.pdf")
+
+    for row_data in excel_data:
+        # Retrieve the item description and item number
+        item_description = row_data['Item_description']
+        item_number = row_data['Item_number']
+
+        # Load the barcode image
+        barcode_image = Image.open(f"{TEMP_DIR}/barcode_{item_number}.png")
+
+        # Create a new PDF page
+        c.showPage()
+
+        # Add the barcode image to the left side of the page
+        c.drawInlineImage(barcode_image, 0, 0)
+
+        # Add the item description and item number to the right side of the page, right justified
+        text = c.beginText(200, 100)  # Adjust the coordinates as needed
+        text.textLine(f"Item #: {item_number}")
+        text.textLine(item_description)
+        c.drawText(text)
+
+    # Save the PDF
     c.save()
-    message_label.config(text="PDF file created successfully.")
-    
-    # Open the combined PDF file
-    os.startfile(combined_pdf_path)
-    
-    # Optionally delete the individual image files after the combined PDF is created
-    for image_file in image_files:
-        try:
-            os.remove(image_file)
-        except Exception as e:
-            print(f"Failed to delete {image_file}: {e}")
-    
-root = ThemedTk(theme="arc")  # Use the "arc" theme
-root.geometry("300x250")
-root.configure(bg='white')
-root.title("Create UPC Labels Form")
 
-# Create a style
+root = ThemedTk(theme="equilux")  # Use the "equilux" theme
+root.geometry('200x200')  # Set the form size to 200x200 pixels
+
 style = ttk.Style()
-style.configure("TButton", font=("Arial", 10), padding=10)
+style.configure("TButton", background="white")
 style.map("TButton",
-          foreground=[('pressed', 'red'), ('active', 'blue')],
-          background=[('pressed', '!disabled', 'black'), ('active', 'white')])
+      foreground=[('active', 'blue')],
+      background=[('active', 'white')])
 
-open_button_images = ttk.Button(root, text="Import Excel & Create Images", command=lambda: import_excel_and_create_images('png'), width=30)
-open_button_images.place(relx=0.5, rely=0.4, anchor='center')  # Place the button at the center of the window
+button1_text = "Import Excel and Create PNG"
+button2_text = "Combine PNG to PDF"
 
-combine_button_images = ttk.Button(root, text="Combine Images to PDF", command=lambda: combine_images_to_pdf('png'), width=30)
-combine_button_images.place(relx=0.5, rely=0.8, anchor='center')  # Place the button at the center of the window
+# Determine the maximum length of the button texts
+max_length = max(len(button1_text), len(button2_text))
 
-message_label = tk.Label(root, text="", bg='white')
-message_label.place(relx=0.5, rely=0.95, anchor='center')  # Place the label at the center of the window
+button1 = ttk.Button(root, text=button1_text, command=import_excel_and_create_png, width=max_length, style="TButton")
+button1.pack(padx=10, pady=10)
 
-root.mainloop()    
+button2 = ttk.Button(root, text=button2_text, command=combine_png_to_pdf, width=max_length, style="TButton")
+button2.pack(padx=10, pady=10)
+
+message_label = tk.Label(root, text="")
+message_label.pack()
+
+# Run the application
+root.mainloop()
