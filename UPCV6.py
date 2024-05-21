@@ -2,15 +2,16 @@ import os
 import pandas as pd
 import requests
 from io import BytesIO
-from PIL import Image
+from PIL import Image as PILImage
 import tkinter as tk
 from tkinter import filedialog
 from reportlab.lib.pagesizes import letter
 from reportlab.pdfgen import canvas
 from tkinter import ttk
 from ttkthemes import ThemedTk
-import glob
-import webbrowser
+from reportlab.lib.units import inch
+from reportlab.platypus import Image as ReportLabImage
+from tkinter import messagebox
 
 TEMP_DIR = "C:\\Temp"
 
@@ -62,10 +63,15 @@ def import_excel_and_create_png():
         # Fetch the barcode image from bwip-js API
         url = f"https://bwipjs-api.metafloor.com/?bcid=upca&text={upc_code}&scale=3&rotate=N&includetext"
         response = requests.get(url)
-        barcode_image = Image.open(BytesIO(response.content)).convert("RGBA")
+        barcode_image = PILImage.open(BytesIO(response.content)).convert("RGBA")
 
-        # Create a new white image of the same size
-        white_background = Image.new("RGBA", barcode_image.size, "WHITE")
+        # Resize the image to fit within the max dimensions
+        max_width = 170
+        max_height = 100
+        barcode_image.thumbnail((max_width, max_height))
+
+        # Create a new white image of the same size as the thumbnail
+        white_background = PILImage.new("RGBA", (max_width, max_height), "WHITE")
         white_background.paste(barcode_image, (0, 0), barcode_image)
 
         barcode_image_path = os.path.join(TEMP_DIR, f"barcode_{i}.png")
@@ -79,33 +85,69 @@ def import_excel_and_create_png():
 
     message_label.config(text="PNG files created successfully.")
 
-# Rest of your code...
 def combine_png_to_pdf():
-    # Create a new PDF
-    c = canvas.Canvas("combined.pdf")
+    # Define the dimensions of the PDF
+    width, height = letter  # 8.5 x 11 inches
 
-    for row_data in excel_data:
-        # Retrieve the item description and item number
-        item_description = row_data['Item_description']
-        item_number = row_data['Item_number']
+    # Define the margins, spacing, and image size
+    top_margin = 0.5 * inch
+    bottom_margin = 0.5 * inch
+    left_margin = 0.5 * inch
+    right_margin = 0.166 * inch
+    row_spacing = 1 * inch
+    column_spacing = 1 * inch
+    column_width = 4 * inch
+    column_height = 2 * inch
+    max_image_width = 170 / 72 * inch  # Convert pixels to inches
+    max_image_height = 100 / 72 * inch  # Convert pixels to inches
 
-        # Load the barcode image
-        barcode_image = Image.open(f"{TEMP_DIR}/barcode_{item_number}.png")
+    # Create a canvas with the defined dimensions
+    combined_pdf_path = os.path.join(TEMP_DIR, "combined.pdf")
+    c = canvas.Canvas(combined_pdf_path, pagesize=letter)
 
-        # Create a new PDF page
-        c.showPage()
+    # Get all PNG files in the directory
+    png_files = [f for f in os.listdir(TEMP_DIR) if f.endswith('.png')]
 
-        # Add the barcode image to the left side of the page
-        c.drawInlineImage(barcode_image, 0, 0)
+    x = left_margin
+    y = height - top_margin - column_height
 
-        # Add the item description and item number to the right side of the page, right justified
-        text = c.beginText(200, 100)  # Adjust the coordinates as needed
-        text.textLine(f"Item #: {item_number}")
-        text.textLine(item_description)
-        c.drawText(text)
+    for i, png_file in enumerate(png_files):
+        # Get the file path
+        png_file_path = os.path.join(TEMP_DIR, png_file)
+
+        # Create a reportlab Image from the file path
+        img = ReportLabImage(png_file_path)
+
+        # Resize the image to fit within the defined image size
+        img_width = min(img.drawWidth, max_image_width)
+        img_height = min(img.drawHeight, max_image_height)
+        img.drawWidth = img_width
+        img.drawHeight = img_height
+
+        # Calculate the x-coordinate for the image to be right-indented
+        img_x = x + column_width - img_width
+
+        # Draw the image on the canvas at the calculated position
+        img.drawOn(c, img_x, y)
+
+        # Move to the next column or row
+        if (i + 1) % 2 == 0:
+            x = left_margin
+            y -= column_height + row_spacing
+        else:
+            x += column_width + column_spacing
+
+        # Add a page break if we've reached the bottom margin
+        if y < bottom_margin + column_height:
+            c.showPage()
+            x = left_margin
+            y = height - top_margin - column_height
 
     # Save the PDF
     c.save()
+    
+    # Display a success message
+    messagebox.showinfo("Success", "PDF created successfully.")
 
 root = ThemedTk(theme="equilux")  # Use the "equilux" theme
 root.geometry('200x200')  # Set the form size to 200x200 pixels
