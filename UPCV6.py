@@ -2,16 +2,15 @@ import os
 import pandas as pd
 import requests
 from io import BytesIO
-from PIL import Image as PILImage
+from PIL import Image as PILImage, UnidentifiedImageError
 import tkinter as tk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
 from tkinter import ttk
 from ttkthemes import ThemedTk
 from reportlab.lib.units import inch
-from reportlab.platypus import Image as ReportLabImage
-from tkinter import messagebox
+from reportlab.platypus import SimpleDocTemplate, Image as ReportLabImage, Spacer, Table, TableStyle, Paragraph
+from reportlab.lib.styles import getSampleStyleSheet
 
 TEMP_DIR = "C:\\Temp"
 
@@ -46,12 +45,20 @@ def import_excel_and_create_png():
         return
 
     for i in range(len(data)):
-        upc = str(data.loc[i, 'UPC-A']).zfill(11)  # Fill with 11 zeros
-        check_digit = calculate_check_digit(upc)
-        upc_code = upc + check_digit
-        upc_numbers.append(upc_code)  # Store the UPC number
+        upc_code = str(data.loc[i, 'UPC-A'])  # Convert UPC_code to string
         item_description = data.loc[i, 'Item Description']
         item_number = str(data.loc[i, 'Item#'])  # Convert item_number to string
+
+        # Check if UPC_code is 11 digits long, if so, prepend a '0'
+        if len(upc_code) == 11:
+            upc_code = '0' + upc_code
+        elif len(upc_code) != 12:
+            message_label.config(text="Invalid UPC length at row {}".format(i + 1))
+            return
+
+        check_digit = calculate_check_digit(upc_code[:11])
+        upc_code = upc_code[:11] + check_digit
+        upc_numbers.append(upc_code)  # Store the UPC number
 
         # Append the row data to the excel_data list
         excel_data.append({
@@ -63,7 +70,16 @@ def import_excel_and_create_png():
         # Fetch the barcode image from bwip-js API
         url = f"https://bwipjs-api.metafloor.com/?bcid=upca&text={upc_code}&scale=3&rotate=N&includetext"
         response = requests.get(url)
-        barcode_image = PILImage.open(BytesIO(response.content)).convert("RGBA")
+
+        if response.content:
+            try:
+                barcode_image = PILImage.open(BytesIO(response.content)).convert("RGBA")
+            except UnidentifiedImageError:
+                messagebox.showerror("Error", "The response content is not a valid image.")
+                continue
+        else:
+            messagebox.showerror("Error", "The response content is empty.")
+            continue
 
         # Resize the image to fit within the max dimensions
         max_width = 170
@@ -85,72 +101,56 @@ def import_excel_and_create_png():
 
     message_label.config(text="PNG files created successfully.")
 
+
 def combine_png_to_pdf():
-    # Define the dimensions of the PDF
-    width, height = letter  # 8.5 x 11 inches
+    # Define the output file path
+    output_file_path = os.path.join(TEMP_DIR, "output.pdf")
 
-    # Define the margins, spacing, and image size
-    top_margin = 0.5 * inch
-    bottom_margin = 0.5 * inch
-    left_margin = 0.5 * inch
-    right_margin = 0.166 * inch
-    row_spacing = 1 * inch
-    column_spacing = 1 * inch
-    column_width = 4 * inch
-    column_height = 2 * inch
-    max_image_width = 170 / 72 * inch  # Convert pixels to inches
-    max_image_height = 100 / 72 * inch  # Convert pixels to inches
+    doc = SimpleDocTemplate(output_file_path, pagesize=letter)
+    story = []
 
-    # Create a canvas with the defined dimensions
-    combined_pdf_path = os.path.join(TEMP_DIR, "combined.pdf")
-    c = canvas.Canvas(combined_pdf_path, pagesize=letter)
+    styles = getSampleStyleSheet()
+    styleN = styles['Normal']
 
-    # Get all PNG files in the directory
+    # Get a list of all PNG files in the TEMP_DIR
     png_files = [f for f in os.listdir(TEMP_DIR) if f.endswith('.png')]
 
-    x = left_margin
-    y = height - top_margin - column_height
+    # Sort the list of files to ensure they're in the correct order
+    png_files.sort()
 
-    for i, png_file in enumerate(png_files):
-        # Get the file path
-        png_file_path = os.path.join(TEMP_DIR, png_file)
+    for i in range(0, len(png_files), 2):
+        # Create a list to hold the description and image for this row
+        row = []
 
-        # Create a reportlab Image from the file path
-        img = ReportLabImage(png_file_path)
+        # Add the first item's description and image to the row
+        desc1 = Paragraph('<font size=8>{}</font>'.format(excel_data[i]['Item_description']), styleN)
+        img1 = ReportLabImage(os.path.join(TEMP_DIR, png_files[i]), width=0.5*inch, height=0.5*inch)
+        row.append([desc1, img1])
 
-        # Resize the image to fit within the defined image size
-        img_width = min(img.drawWidth, max_image_width)
-        img_height = min(img.drawHeight, max_image_height)
-        img.drawWidth = img_width
-        img.drawHeight = img_height
+        # If there is a second item, add its description and image to the row
+        if i+1 < len(png_files):
+            desc2 = Paragraph('<font size=8>{}</font>'.format(excel_data[i+1]['Item_description']), styleN)
+            img2 = ReportLabImage(os.path.join(TEMP_DIR, png_files[i+1]), width=0.5*inch, height=0.5*inch)
+            row.append([desc2, img2])
 
-        # Calculate the x-coordinate for the image to be right-indented
-        img_x = x + column_width - img_width
+        # Create a table with the descriptions and images in the row
+        table = Table(row, colWidths=[3*inch, 3*inch])
 
-        # Draw the image on the canvas at the calculated position
-        img.drawOn(c, img_x, y)
+        # Set the alignment of the second column to left
+        table.setStyle(TableStyle([('LEFTPADDING', (1,0), (-1,-1), 0)]))
 
-        # Move to the next column or row
-        if (i + 1) % 2 == 0:
-            x = left_margin
-            y -= column_height + row_spacing
-        else:
-            x += column_width + column_spacing
+        # Add the table to the story
+        story.append(table)
 
-        # Add a page break if we've reached the bottom margin
-        if y < bottom_margin + column_height:
-            c.showPage()
-            x = left_margin
-            y = height - top_margin - column_height
-
-    # Save the PDF
-    c.save()
+    doc.build(story)
     
+    # Open the PDF file
+    os.startfile(output_file_path)
+
     # Display a success message
     messagebox.showinfo("Success", "PDF created successfully.")
-
 root = ThemedTk(theme="equilux")  # Use the "equilux" theme
-root.geometry('200x200')  # Set the form size to 200x200 pixels
+root.geometry('300x200')  # Set the form size to 300x200 pixels
 
 style = ttk.Style()
 style.configure("TButton", background="white")
