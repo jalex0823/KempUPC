@@ -9,8 +9,10 @@ from reportlab.lib.pagesizes import letter
 from tkinter import ttk
 from ttkthemes import ThemedTk
 from reportlab.lib.units import inch
-from reportlab.platypus import SimpleDocTemplate, Image as ReportLabImage, Spacer, Table, TableStyle, Paragraph
+from reportlab.platypus import SimpleDocTemplate, Image as ReportLabImage, Spacer, Table, TableStyle, Paragraph, PageBreak
 from reportlab.lib.styles import getSampleStyleSheet
+from reportlab.lib import colors
+from reportlab.lib.enums import TA_CENTER
 
 TEMP_DIR = "C:\\Temp"
 
@@ -29,7 +31,7 @@ def calculate_check_digit(upca):
 
 def import_excel_and_create_png():
     global upc_numbers
-    global excel_data  # Add this line to access the global variable
+    global excel_data
     filepath = filedialog.askopenfilename(filetypes=[("Excel files", "*.xlsx;*.xls;*.xlsb")])
     if not filepath:
         return
@@ -39,17 +41,25 @@ def import_excel_and_create_png():
     else:
         data = pd.read_excel(filepath)
 
-    required_columns = ['Item#', 'Item Description', 'UPC-A']
+    required_columns = ['Item#', 'Item Description', 'Group', 'UPC-A']
     if data is None or not set(required_columns).issubset(data.columns):
         message_label.config(text="Failed to read Excel file or missing columns.")
         return
 
-    for i in range(len(data)):
-        upc_code = str(data.loc[i, 'UPC-A'])  # Convert UPC_code to string
-        item_description = data.loc[i, 'Item Description']
-        item_number = str(data.loc[i, 'Item#'])  # Convert item_number to string
+    num_rows = len(data)
+    progress_bar['maximum'] = num_rows
 
-        # Check if UPC_code is 11 digits long, if so, prepend a '0'
+    for i in range(num_rows):
+        upc_code = str(data.loc[i, 'UPC-A'])
+        item_description = data.loc[i, 'Item Description']
+        item_number = str(data.loc[i, 'Item#'])
+        group_name = data.loc[i, 'Group']
+
+        if pd.isna(group_name):
+            group_name = "UNKNOWN"
+        else:
+            group_name = str(group_name)
+
         if len(upc_code) == 11:
             upc_code = '0' + upc_code
         elif len(upc_code) != 12:
@@ -58,16 +68,15 @@ def import_excel_and_create_png():
 
         check_digit = calculate_check_digit(upc_code[:11])
         upc_code = upc_code[:11] + check_digit
-        upc_numbers.append(upc_code)  # Store the UPC number
+        upc_numbers.append(upc_code)
 
-        # Append the row data to the excel_data list
         excel_data.append({
             'Item_description': item_description,
             'Item_number': item_number,
-            'UPC_code': upc_code
+            'UPC_code': upc_code,
+            'Group': group_name
         })
 
-        # Fetch the barcode image from bwip-js API
         url = f"https://bwipjs-api.metafloor.com/?bcid=upca&text={upc_code}&scale=3&rotate=N&includetext"
         response = requests.get(url)
 
@@ -81,29 +90,27 @@ def import_excel_and_create_png():
             messagebox.showerror("Error", "The response content is empty.")
             continue
 
-        # Resize the image to fit within the max dimensions
         max_width = 170
         max_height = 100
         barcode_image.thumbnail((max_width, max_height))
 
-        # Create a new white image of the same size as the thumbnail
         white_background = PILImage.new("RGBA", (max_width, max_height), "WHITE")
         white_background.paste(barcode_image, (0, 0), barcode_image)
 
         barcode_image_path = os.path.join(TEMP_DIR, f"barcode_{i}.png")
         white_background.save(barcode_image_path)
 
-        # Verify if the file has been created
         if os.path.exists(barcode_image_path):
-            print(f"Barcode saved as {barcode_image_path}")
+            log_message(f"Barcode saved as {barcode_image_path}")
         else:
-            print("Error in saving the barcode.")
+            log_message("Error in saving the barcode.")
 
-    message_label.config(text="PNG files created successfully.")
+        progress_bar['value'] = i + 1
+        root.update_idletasks()
 
+    combine_png_to_pdf()
 
 def combine_png_to_pdf():
-    # Define the output file path
     output_file_path = os.path.join(TEMP_DIR, "output.pdf")
 
     doc = SimpleDocTemplate(output_file_path, pagesize=letter)
@@ -111,67 +118,116 @@ def combine_png_to_pdf():
 
     styles = getSampleStyleSheet()
     styleN = styles['Normal']
+    styleH = styles['Heading1']
+    styleH.alignment = TA_CENTER
 
-    # Get a list of all PNG files in the TEMP_DIR
     png_files = [f for f in os.listdir(TEMP_DIR) if f.endswith('.png')]
-
-    # Sort the list of files to ensure they're in the correct order
     png_files.sort()
 
-    for i in range(0, len(png_files), 2):
-        # Create a list to hold the description and image for this row
-        row = []
+    grouped_data = {}
+    for i in range(len(excel_data)):
+        group_name = excel_data[i]['Group']
+        if group_name not in grouped_data:
+            grouped_data[group_name] = []
+        grouped_data[group_name].append({
+            'description': excel_data[i]['Item_description'],
+            'number': excel_data[i]['Item_number'],
+            'png_file': os.path.join(TEMP_DIR, f"barcode_{i}.png")
+        })
 
-        # Add the first item's description and image to the row
-        desc1 = Paragraph('<font size=8>{}</font>'.format(excel_data[i]['Item_description']), styleN)
-        img1 = ReportLabImage(os.path.join(TEMP_DIR, png_files[i]), width=0.5*inch, height=0.5*inch)
-        row.append([desc1, img1])
+    first_group = True
+    for group_name, items in grouped_data.items():
+        if not first_group:
+            story.append(PageBreak())
+        else:
+            first_group = False
 
-        # If there is a second item, add its description and image to the row
-        if i+1 < len(png_files):
-            desc2 = Paragraph('<font size=8>{}</font>'.format(excel_data[i+1]['Item_description']), styleN)
-            img2 = ReportLabImage(os.path.join(TEMP_DIR, png_files[i+1]), width=0.5*inch, height=0.5*inch)
-            row.append([desc2, img2])
+        group_header = Paragraph(f'<b>{group_name.upper()}</b>', styleH)
+        story.append(group_header)
+        story.append(Spacer(1, 12))
 
-        # Create a table with the descriptions and images in the row
-        table = Table(row, colWidths=[3*inch, 3*inch])
+        for i in range(0, len(items), 2):
+            row = []
 
-        # Set the alignment of the second column to left
-        table.setStyle(TableStyle([('LEFTPADDING', (1,0), (-1,-1), 0)]))
+            # First item in the row
+            desc1 = Paragraph('<font size=10>{}</font>'.format(items[i]['description']), styleN)
+            item_num1 = Paragraph('<font size=10>{}</font>'.format(items[i]['number']), styleN)
+            img_path1 = items[i]['png_file']
+            with PILImage.open(img_path1) as img:
+                original_width, original_height = img.size
+                new_width = 2 * inch
+                new_height = (new_width / original_width) * original_height
+            img1 = ReportLabImage(img_path1, width=new_width, height=new_height)
 
-        # Add the table to the story
-        story.append(table)
+            item1 = Table([[desc1], [img1], [item_num1]], colWidths=[3 * inch])
+            item1.setStyle(TableStyle([
+                ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+                ('ALIGN', (0, 1), (0, 1), 'CENTER'),
+                ('ALIGN', (0, 2), (0, 2), 'LEFT'),
+                ('BOX', (0, 0), (-1, -1), 0.25, colors.black),
+                ('PAD', (0, 0), (-1, -1), 5)
+            ]))
+            row.append(item1)
+
+            # Second item in the row (if it exists)
+            if i + 1 < len(items):
+                desc2 = Paragraph('<font size=10>{}</font>'.format(items[i + 1]['description']), styleN)
+                item_num2 = Paragraph('<font size=10>{}</font>'.format(items[i + 1]['number']), styleN)
+                img_path2 = items[i + 1]['png_file']
+                with PILImage.open(img_path2) as img:
+                    original_width, original_height = img.size
+                    new_width = 2 * inch
+                    new_height = (new_width / original_width) * original_height
+                img2 = ReportLabImage(img_path2, width=new_width, height=new_height)
+
+                item2 = Table([[desc2], [img2], [item_num2]], colWidths=[3 * inch])
+                item2.setStyle(TableStyle([
+                    ('ALIGN', (0, 0), (0, 0), 'LEFT'),
+                    ('ALIGN', (0, 1), (0, 1), 'CENTER'),
+                    ('ALIGN', (0, 2), (0, 2), 'LEFT'),
+                    ('BOX', (0, 0), (-1, -1), 0.25, colors.black),
+                    ('PAD', (0, 0), (-1, -1), 5)
+                ]))
+                row.append(item2)
+
+            # Combine the row into a table
+            # Combine the row into a table
+            table = Table([row], colWidths=[3.5 * inch, 3.5 * inch])  # Increase the column widths
+            table.setStyle(TableStyle([
+                ('RIGHTPADDING', (0, 0), (-1, -1), 20),
+                ('LEFTPADDING', (0, 0), (-1, -1), 20),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ]))
+            story.append(table)
+            story.append(Spacer(1 * inch, 0))
 
     doc.build(story)
-    
-    # Open the PDF file
     os.startfile(output_file_path)
+    messagebox.showinfo("Success", "All process completed successfully.")
 
-    # Display a success message
-    messagebox.showinfo("Success", "PDF created successfully.")
-root = ThemedTk(theme="equilux")  # Use the "equilux" theme
-root.geometry('300x200')  # Set the form size to 300x200 pixels
+def log_message(message):
+    log_text.insert(tk.END, message + "\n")
+    log_text.see(tk.END)
+
+root = ThemedTk(theme="equilux")
+root.geometry('600x500')
+root.title("UPC-A Label Generator")
 
 style = ttk.Style()
 style.configure("TButton", background="white")
-style.map("TButton",
-      foreground=[('active', 'blue')],
-      background=[('active', 'white')])
+style.map("TButton", background=[("active", "lightgray")])
 
-button1_text = "Import Excel and Create PNG"
-button2_text = "Combine PNG to PDF"
+import_button = ttk.Button(root, text="Import Excel and Create PNG", command=import_excel_and_create_png)
+import_button.pack(padx=20, pady=10)
 
-# Determine the maximum length of the button texts
-max_length = max(len(button1_text), len(button2_text))
+progress_bar = ttk.Progressbar(root, orient=tk.HORIZONTAL, length=300, mode='determinate')
+progress_bar.pack(padx=20, pady=10)
 
-button1 = ttk.Button(root, text=button1_text, command=import_excel_and_create_png, width=max_length, style="TButton")
-button1.pack(padx=10, pady=10)
+log_text = tk.Text(root, wrap=tk.WORD, font=("Courier", 10))
+log_text.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
 
-button2 = ttk.Button(root, text=button2_text, command=combine_png_to_pdf, width=max_length, style="TButton")
-button2.pack(padx=10, pady=10)
+scrollbar = tk.Scrollbar(log_text, command=log_text.yview)
+scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+log_text.config(yscrollcommand=scrollbar.set)
 
-message_label = tk.Label(root, text="")
-message_label.pack()
-
-# Run the application
 root.mainloop()
